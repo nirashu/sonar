@@ -1,0 +1,9 @@
+---
+# vars file for sonar
+db_user: sonar
+db_password: 12345678
+db_name: sonarqube
+sonar_jdbc_user: sonar
+sonar_jdbc_password: 12345678  
+sonar_download_version: sonarqube-8.9.9.56886  
+sonarqube_application_version_jar: /opt/sonarqube/lib/sonar-application-8.9.9.56886.jar  

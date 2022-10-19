@@ -1,0 +1,145 @@
+- name: Install packages
+  apt: name={{ item }} state=present
+  loop:
+    - default-jdk
+    - nginx
+    - git
+    - postgresql 
+    - postgresql-contrib
+    - python3-psycopg2
+    - acl
+    - zip
+  when: ansible_os_family == "Debian"
+- name: Install packages
+  dnf: name={{ item }} state=present
+  loop:
+    - java-11-openjdk-devel
+    - nginx
+    - git
+    - postgresql
+    - postgresql-server
+  when: ansible_os_family == "RedHat"    
+- name: "Install packages"
+  yum : "name={{ item }} state=present"
+  with_items:
+    - python3-psycopg2    
+    - zip
+  when: ansible_os_family == "RedHat"
+
+- name: "Find out if PostgreSQL is initialized"
+  ansible.builtin.stat:
+    path: "/var/lib/pgsql/data/pg_hba.conf"
+  register: postgres_data
+
+- name: "Start and enable services"
+  service: "name={{ item }} state=started enabled=yes"
+  with_items:
+    - postgresql
+
+- name: "Create app database"
+  postgresql_db:
+    state: present
+    name: "{{ db_name }}"
+  become: yes
+  become_user: postgres
+
+- name: "Create db user"
+  postgresql_user:
+    state: present
+    name: "{{ db_user }}"
+    password: "{{ db_password }}"
+    priv: ALL
+    db: sonarqube
+  become: yes
+  become_user: postgres
+
+- name: "Grant db user access to app db"
+  postgresql_privs:
+    type: database
+    database: "{{ db_name }}"
+    roles: "{{ db_user }}"
+    grant_option: no
+    privs: all
+  become: yes
+  become_user: postgres
+
+- name: "Allow md5 connection for the db user"
+  postgresql_pg_hba:
+    dest: "~/data/pg_hba.conf"
+    contype: host
+    databases: all
+    method: md5
+    users: "{{ db_user }}"
+    create: true
+  become: yes
+  become_user: postgres
+  when: ansible_os_family == "RedHat"
+
+- name: Recursively change ownership of a directory
+  ansible.builtin.file:
+    path: /opt/sonarqube
+    state: directory
+    recurse: yes
+- name: Ensure group "sonar"
+  ansible.builtin.group:
+      name: sonar
+      state: present
+- name: Add the user 'sonar'
+  ansible.builtin.user:
+    name: sonar
+    shell: /bin/false
+    groups: sonar
+    home: /opt/sonarqube
+    createhome: no
+    system: yes
+- name: Download Sonarqube
+  ansible.builtin.get_url:
+    url: https://binaries.sonarsource.com/Distribution/sonarqube/{{ sonar_download_version }}.zip
+    dest: /tmp/
+    mode: '0644'
+
+- name: Recursively change ownership of a directory
+  ansible.builtin.file:
+    path: /opt/sonarqube/
+    state: directory
+    recurse: yes
+    owner: sonar
+    group: sonar
+- name: Extract sonarqube archive
+  unarchive:
+    src: /tmp/{{ sonar_download_version }}.zip
+    dest: /tmp
+    remote_src: yes
+- name: move /tmp/sonarqube to the /opt/sonarqube directory
+  shell: |
+    rm -rf /tmp/{{ sonar_download_version }}.zip 
+    rm -rf /opt/sonarqube/*
+    mv /tmp/{{ sonar_download_version }}/* /opt/sonarqube
+    chown -R sonar:sonar /opt/sonarqube
+    sysctl -w vm.max_map_count=262144
+
+- name: Create service for sonar
+  template:
+    src: sonar.service.j2
+    dest: /etc/systemd/system/sonar.service
+    owner: root
+    group: root
+    mode: 0644
+- name: Create sonar.properties file
+  template:
+    src: sonar.properties.j2
+    dest: /opt/sonarqube/conf/sonar.properties   
+    owner: sonar
+    group: sonar
+    mode: 0644
+- name: Here we are replacing the string pattern
+  replace:
+    path: /opt/sonarqube/bin/linux-x86-64/sonar.sh 
+    regexp: '#RUN_AS_USER='
+    replace: "RUN_AS_USER=sonar"      
+- name: Sonar Service Start
+  ansible.builtin.systemd:
+    state: started
+    daemon_reload: yes
+    name: sonar
+    enabled: yes      
